@@ -1,0 +1,162 @@
+#include <TinyGPS++.h>
+#include <SoftwareSerial.h>
+
+#define DEBUG
+
+#ifdef DEBUG
+#define DEBUG_PRINT(...) Serial.print(__VA_ARGS__)
+#define DEBUG_PRINTLN(...) Serial.println(__VA_ARGS__)
+#else
+#define DEBUG_PRINT(...)
+#define DEBUG_PRINTLN(...)
+#endif
+
+TinyGPSPlus gps;
+#define GPS_SERIAL Serial1
+#define HC12_SERIAL Serial2
+
+const int ENA = 12;
+const int ENB = 13;
+const int motorPin1 = 8;
+const int motorPin2 = 9;
+const int motorPin3 = 11;
+const int motorPin4 = 10;
+
+struct MotorCommand {
+  int leftPWM;
+  int rightPWM;
+};
+MotorCommand currentCommand = {0, 0};
+unsigned long lastCommandTime = 0;
+const unsigned long COMMAND_TIMEOUT = 2000; // 2 seconds
+
+void setup() {
+  #ifdef DEBUG
+  Serial.begin(115200);
+  #endif
+  
+  GPS_SERIAL.begin(9600);
+  HC12_SERIAL.begin(9600);
+  
+  pinMode(ENA, OUTPUT);
+  pinMode(ENB, OUTPUT);
+  pinMode(motorPin1, OUTPUT);
+  pinMode(motorPin2, OUTPUT);
+  pinMode(motorPin3, OUTPUT);
+  pinMode(motorPin4, OUTPUT);
+  
+  // Initialize motors to stop
+  digitalWrite(motorPin1, LOW);
+  digitalWrite(motorPin2, LOW);
+  digitalWrite(motorPin3, LOW);
+  digitalWrite(motorPin4, LOW);
+  analogWrite(ENA, 0);
+  analogWrite(ENB, 0);
+  
+  DEBUG_PRINTLN("Robot Initialized");
+}
+
+void loop() {
+  // Read GPS data
+  while (GPS_SERIAL.available() > 0) {
+    if (gps.encode(GPS_SERIAL.read())) {
+      if (gps.location.isValid() && gps.location.isUpdated()) {
+        sendGPSData();
+      }
+    }
+  }
+  
+  // Check for incoming commands
+  if (HC12_SERIAL.available() > 0) {
+    String command = HC12_SERIAL.readStringUntil('\n');
+    command.trim();
+    if (command.startsWith("CMD:")) {
+      parseMotorCommand(command);
+      executeMotorCommand();
+      lastCommandTime = millis();
+    }
+  }
+  
+  // Safety timeout - stop if no commands received
+  if (millis() - lastCommandTime > COMMAND_TIMEOUT) {
+    currentCommand = {0, 0};
+    executeMotorCommand();
+    DEBUG_PRINTLN("Command timeout - stopping");
+  }
+  
+  delay(50);
+}
+
+void sendGPSData() {
+  float latitude = gps.location.lat();
+  float longitude = gps.location.lng();
+  float speed = gps.speed.mps();
+  float course = gps.course.deg();
+  
+  HC12_SERIAL.print("GPS:");
+  HC12_SERIAL.print(latitude, 6);
+  HC12_SERIAL.print(",");
+  HC12_SERIAL.print(longitude, 6);
+  HC12_SERIAL.print(",");
+  HC12_SERIAL.print(speed, 2);
+  HC12_SERIAL.print(",");
+  HC12_SERIAL.println(course, 2);
+  
+  DEBUG_PRINT("GPS: ");
+  DEBUG_PRINT(latitude, 6);
+  DEBUG_PRINT(", ");
+  DEBUG_PRINT(longitude, 6);
+  DEBUG_PRINT(", Speed: ");
+  DEBUG_PRINT(speed, 2);
+  DEBUG_PRINT(" m/s, Course: ");
+  DEBUG_PRINTLN(course, 2);
+}
+
+void parseMotorCommand(String command) {
+  int commaIndex = command.indexOf(',', 4);
+  if (commaIndex != -1) {
+    currentCommand.leftPWM = command.substring(4, commaIndex).toInt();
+    currentCommand.rightPWM = command.substring(commaIndex + 1).toInt();
+    
+    // Constrain PWM values to -255 to 255 range
+    currentCommand.leftPWM = constrain(currentCommand.leftPWM, -255, 255);
+    currentCommand.rightPWM = constrain(currentCommand.rightPWM, -255, 255);
+  }
+}
+
+void executeMotorCommand() {
+  // Left motor control
+  if (currentCommand.leftPWM > 0) {
+    digitalWrite(motorPin1, HIGH);
+    digitalWrite(motorPin2, LOW);
+    analogWrite(ENA, currentCommand.leftPWM);
+  } else if (currentCommand.leftPWM < 0) {
+    digitalWrite(motorPin1, LOW);
+    digitalWrite(motorPin2, HIGH);
+    analogWrite(ENA, abs(currentCommand.leftPWM));
+  } else {
+    digitalWrite(motorPin1, LOW);
+    digitalWrite(motorPin2, LOW);
+    analogWrite(ENA, 0);
+  }
+  
+  // Right motor control
+  if (currentCommand.rightPWM > 0) {
+    digitalWrite(motorPin3, HIGH);
+    digitalWrite(motorPin4, LOW);
+    analogWrite(ENB, currentCommand.rightPWM);
+  } else if (currentCommand.rightPWM < 0) {
+    digitalWrite(motorPin3, LOW);
+    digitalWrite(motorPin4, HIGH);
+    analogWrite(ENB, abs(currentCommand.rightPWM));
+  } else {
+    digitalWrite(motorPin3, LOW);
+    digitalWrite(motorPin4, LOW);
+    analogWrite(ENB, 0);
+  }
+  
+  DEBUG_PRINT("Motors: L=");
+  DEBUG_PRINT(currentCommand.leftPWM);
+  DEBUG_PRINT(", R=");
+  DEBUG_PRINTLN(currentCommand.rightPWM);
+}
