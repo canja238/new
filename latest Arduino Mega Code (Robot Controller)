@@ -1,0 +1,236 @@
+#include <TinyGPS++.h>
+#include <SoftwareSerial.h>
+
+#define DEBUG
+
+#ifdef DEBUG
+#define DEBUG_PRINT(...) Serial.print(__VA_ARGS__)
+#define DEBUG_PRINTLN(...) Serial.println(__VA_ARGS__)
+#else
+#define DEBUG_PRINT(...)
+#define DEBUG_PRINTLN(...)
+#endif
+
+TinyGPSPlus gps;
+#define GPS_SERIAL Serial1
+#define HC12_SERIAL Serial2
+
+// Motor pins
+const int ENA = 12;
+const int ENB = 13;
+const int motorPin1 = 8;
+const int motorPin2 = 9;
+const int motorPin3 = 11;
+const int motorPin4 = 10;
+
+// Motor control structure
+struct MotorCommand {
+  int leftPWM;
+  int rightPWM;
+  bool updated;
+};
+
+MotorCommand currentCommand = {0, 0, false};
+unsigned long lastCommandTime = 0;
+const unsigned long COMMAND_TIMEOUT = 2000; // 2 seconds
+const unsigned long GPS_UPDATE_INTERVAL = 500; // Send GPS every 500ms
+unsigned long lastGPSUpdate = 0;
+
+// Motor ramping for smoother acceleration
+const int MAX_PWM_CHANGE = 10; // Max change per cycle
+int lastLeftPWM = 0;
+int lastRightPWM = 0;
+
+void setup() {
+  #ifdef DEBUG
+  Serial.begin(115200);
+  #endif
+  
+  GPS_SERIAL.begin(9600);
+  HC12_SERIAL.begin(9600);
+  
+  // Motor control pins
+  pinMode(ENA, OUTPUT);
+  pinMode(ENB, OUTPUT);
+  pinMode(motorPin1, OUTPUT);
+  pinMode(motorPin2, OUTPUT);
+  pinMode(motorPin3, OUTPUT);
+  pinMode(motorPin4, OUTPUT);
+  
+  // Initialize motors to stop
+  stopMotors();
+  
+  DEBUG_PRINTLN("Robot Initialized");
+}
+
+void loop() {
+  // Read and process GPS data
+  readGPS();
+  
+  // Check for incoming commands
+  readCommands();
+  
+  // Execute motor commands with ramping
+  executeMotorCommandWithRamp();
+  
+  // Safety timeout
+  checkTimeout();
+  
+  delay(20); // Reduced delay for more responsive control
+}
+
+void readGPS() {
+  bool newData = false;
+  
+  // Read all available GPS data
+  while (GPS_SERIAL.available() > 0) {
+    if (gps.encode(GPS_SERIAL.read())) {
+      newData = true;
+    }
+  }
+  
+  // Send GPS data at fixed interval when we have valid data
+  if (newData && gps.location.isValid() && millis() - lastGPSUpdate > GPS_UPDATE_INTERVAL) {
+    sendGPSData();
+    lastGPSUpdate = millis();
+  }
+}
+
+void sendGPSData() {
+  float latitude = gps.location.lat();
+  float longitude = gps.location.lng();
+  float speed = gps.speed.isValid() ? gps.speed.mps() : 0.0;
+  float course = gps.course.isValid() ? gps.course.deg() : 0.0;
+  int satellites = gps.satellites.isValid() ? gps.satellites.value() : 0;
+  
+  // Format: GPS:lat,lon,speed,course,satellites,hdop
+  HC12_SERIAL.print("GPS:");
+  HC12_SERIAL.print(latitude, 6);
+  HC12_SERIAL.print(",");
+  HC12_SERIAL.print(longitude, 6);
+  HC12_SERIAL.print(",");
+  HC12_SERIAL.print(speed, 2);
+  HC12_SERIAL.print(",");
+  HC12_SERIAL.print(course, 2);
+  HC12_SERIAL.print(",");
+  HC12_SERIAL.print(satellites);
+  
+  DEBUG_PRINT("GPS: ");
+  DEBUG_PRINT(latitude, 6);
+  DEBUG_PRINT(", ");
+  DEBUG_PRINT(longitude, 6);
+  DEBUG_PRINT(", Sats: ");
+  DEBUG_PRINTLN(satellites);
+}
+
+void readCommands() {
+  if (HC12_SERIAL.available() > 0) {
+    String command = HC12_SERIAL.readStringUntil('\n');
+    command.trim();
+    
+    if (command.startsWith("CMD:")) {
+      parseMotorCommand(command);
+      lastCommandTime = millis();
+    }
+  }
+}
+
+void parseMotorCommand(String command) {
+  int commaIndex = command.indexOf(',', 4);
+  if (commaIndex != -1) {
+    currentCommand.leftPWM = command.substring(4, commaIndex).toInt();
+    currentCommand.rightPWM = command.substring(commaIndex + 1).toInt();
+    currentCommand.updated = true;
+    
+    // Constrain values to -100 to 100 range
+    currentCommand.leftPWM = constrain(currentCommand.leftPWM, -100, 100);
+    currentCommand.rightPWM = constrain(currentCommand.rightPWM, -100, 100);
+  }
+}
+
+void executeMotorCommandWithRamp() {
+  // Only update if we have a new command
+  if (!currentCommand.updated) {
+    return;
+  }
+  
+  // Apply ramping to left motor
+  int leftDiff = currentCommand.leftPWM - lastLeftPWM;
+  if (abs(leftDiff) > MAX_PWM_CHANGE) {
+    currentCommand.leftPWM = lastLeftPWM + (leftDiff > 0 ? MAX_PWM_CHANGE : -MAX_PWM_CHANGE);
+  }
+  
+  // Apply ramping to right motor
+  int rightDiff = currentCommand.rightPWM - lastRightPWM;
+  if (abs(rightDiff) > MAX_PWM_CHANGE) {
+    currentCommand.rightPWM = lastRightPWM + (rightDiff > 0 ? MAX_PWM_CHANGE : -MAX_PWM_CHANGE);
+  }
+  
+  // Execute the command
+  executeMotorCommand();
+  
+  // Store current values for next ramp calculation
+  lastLeftPWM = currentCommand.leftPWM;
+  lastRightPWM = currentCommand.rightPWM;
+  currentCommand.updated = false;
+}
+
+void executeMotorCommand() {
+  // Left motor control
+  if (currentCommand.leftPWM > 5) { // Small deadzone
+    digitalWrite(motorPin1, HIGH);
+    digitalWrite(motorPin2, LOW);
+    analogWrite(ENA, map(abs(currentCommand.leftPWM), 0, 100, 0, 255));
+  } 
+  else if (currentCommand.leftPWM < -5) {
+    digitalWrite(motorPin1, LOW);
+    digitalWrite(motorPin2, HIGH);
+    analogWrite(ENA, map(abs(currentCommand.leftPWM), 0, 100, 0, 255));
+  } 
+  else {
+    digitalWrite(motorPin1, LOW);
+    digitalWrite(motorPin2, LOW);
+    analogWrite(ENA, 0);
+  }
+  
+  // Right motor control
+  if (currentCommand.rightPWM > 5) { // Small deadzone
+    digitalWrite(motorPin3, HIGH);
+    digitalWrite(motorPin4, LOW);
+    analogWrite(ENB, map(abs(currentCommand.rightPWM), 0, 100, 0, 255));
+  } 
+  else if (currentCommand.rightPWM < -5) {
+    digitalWrite(motorPin3, LOW);
+    digitalWrite(motorPin4, HIGH);
+    analogWrite(ENB, map(abs(currentCommand.rightPWM), 0, 100, 0, 255));
+  } 
+  else {
+    digitalWrite(motorPin3, LOW);
+    digitalWrite(motorPin4, LOW);
+    analogWrite(ENB, 0);
+  }
+  
+  DEBUG_PRINT("Motors: L=");
+  DEBUG_PRINT(currentCommand.leftPWM);
+  DEBUG_PRINT(", R=");
+  DEBUG_PRINTLN(currentCommand.rightPWM);
+}
+
+void stopMotors() {
+  digitalWrite(motorPin1, LOW);
+  digitalWrite(motorPin2, LOW);
+  digitalWrite(motorPin3, LOW);
+  digitalWrite(motorPin4, LOW);
+  analogWrite(ENA, 0);
+  analogWrite(ENB, 0);
+  
+  lastLeftPWM = 0;
+  lastRightPWM = 0;
+}
+
+void checkTimeout() {
+  if (millis() - lastCommandTime > COMMAND_TIMEOUT) {
+    currentCommand = {0, 0, true}; // Will be processed in next cycle with ramping
+    DEBUG_PRINTLN("Command timeout - stopping");
+  }
+}
