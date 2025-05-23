@@ -1,0 +1,58 @@
+#include <SoftwareSerial.h>
+
+#define HC12_RX_PIN 10
+#define HC12_TX_PIN 11
+SoftwareSerial HC12_SERIAL(HC12_RX_PIN, HC12_TX_PIN);
+
+// GPS data validation
+const int MIN_SATELLITES = 4; // Minimum satellites for valid GPS data
+
+void setup() {
+  Serial.begin(115200);
+  HC12_SERIAL.begin(9600);
+  
+  pinMode(HC12_RX_PIN, INPUT);
+  pinMode(HC12_TX_PIN, OUTPUT);
+  
+  Serial.println("Base Station Ready");
+}
+
+void loop() {
+  // Forward GPS data from robot to MATLAB with validation
+  if (HC12_SERIAL.available()) {
+    String data = HC12_SERIAL.readStringUntil('\n');
+    data.trim();
+    
+    if (data.startsWith("GPS:")) {
+      // Parse and validate GPS data
+      int firstComma = data.indexOf(',');
+      int secondComma = data.indexOf(',', firstComma + 1);
+      int thirdComma = data.indexOf(',', secondComma + 1);
+      int fourthComma = data.indexOf(',', thirdComma + 1);
+      
+      if (firstComma != -1 && secondComma != -1 && thirdComma != -1 && fourthComma != -1) {
+        int satellites = data.substring(fourthComma + 1).toInt();
+        
+        if (satellites >= MIN_SATELLITES) {
+          Serial.println(data);
+        } else {
+          Serial.println("GPS:0,0,0,0,0"); // Invalid data marker
+        }
+      } else {
+        Serial.println("GPS:0,0,0,0,0"); // Invalid data marker
+      }
+    }
+  }
+  
+  // Forward commands from MATLAB to robot
+  if (Serial.available()) {
+    String command = Serial.readStringUntil('\n');
+    command.trim();
+    
+    if (command.startsWith("CMD:")) {
+      HC12_SERIAL.println(command);
+    }
+  }
+  
+  delay(10);
+}
