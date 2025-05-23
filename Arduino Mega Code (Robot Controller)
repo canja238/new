@@ -13,7 +13,7 @@
 
 TinyGPSPlus gps;
 #define GPS_SERIAL Serial1
-#define HC12_SERIAL Serial2
+#define HC12_SERIAL Serial3
 
 const int ENA = 12;
 const int ENB = 13;
@@ -110,25 +110,25 @@ void parseMotorCommand(String command) {
 void executeMotorCommand() {
   // Left motor
   if (currentCommand.leftPWM > 0) {
-    digitalWrite(motorPin1, HIGH);
-    digitalWrite(motorPin2, LOW);
-  } else if (currentCommand.leftPWM < 0) {
     digitalWrite(motorPin1, LOW);
     digitalWrite(motorPin2, HIGH);
-  } else {
-    digitalWrite(motorPin1, LOW);
+  } else if (currentCommand.leftPWM < 0) {
+    digitalWrite(motorPin1, HIGH);
     digitalWrite(motorPin2, LOW);
+  } else {
+    digitalWrite(motorPin1, HIGH);
+    digitalWrite(motorPin2, HIGH);
   }
   
   // Right motor
   if (currentCommand.rightPWM > 0) {
-    digitalWrite(motorPin3, HIGH);
-    digitalWrite(motorPin4, LOW);
-  } else if (currentCommand.rightPWM < 0) {
     digitalWrite(motorPin3, LOW);
     digitalWrite(motorPin4, HIGH);
+  } else if (currentCommand.rightPWM < 0) {
+    digitalWrite(motorPin3, HIGH);
+    digitalWrite(motorPin4, LOW);
   } else {
-    digitalWrite(motorPin3, LOW);
+    digitalWrite(motorPin3, HIGH);
     digitalWrite(motorPin4, LOW);
   }
   
