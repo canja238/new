@@ -1,0 +1,20 @@
+Study (Year)					Controller				Primary Sensors			Navigation Method			Positioning Accuracy			Wireless Comm.		Key Innovation						TerraDrive Differentiation
+Ignatious et al. (2022) [1]		Not specified			Camera, LiDAR, Radar	Sensor fusion				<1m (sensor-dependent)			5G					Comprehensive AV sensor review		Uses low-cost GPS instead of multi-sensor arrays
+San Martín et al. (2020) [2]	UWB processor			UWB anchors, IMU		UWB/GPS hybrid				10cm							UWB					Centimeter-level precision			Avoids expensive UWB infrastructure
+Zein et al. (2018) [3]			Embedded Linux			GPS, IMU				Waypoint tracking			1-2m							GSM					GPS drift compensation				Adds fuzzy logic for improved tracking
+Chen (2017) [5]					Arduino Uno				IR sensors				Line following				5cm (relative)					2.4GHz RF			Educational RC platform				Upgrades to GPS navigation
+Dumbaugh et al. (2009) [6]		PIC18F4520				Sonar, IR				Wall following				10cm (relative)					Zigbee				Early autonomous prototype			Focuses on absolute GPS positioning
+Thaker (2024) [7]				Raspberry Pi 4			GPS, Camera				Visual-GPS fusion			0.5-1m							Wi-Fi				Low-cost autonomous car				Uses Arduino instead of Pi
+Feng et al. (2018) [8]			STM32F103				Encoders, IMU			Dead reckoning				2-3m							Bluetooth			STEM education						Incorporates fuzzy logic control
+Rahiman & Zainal (2013) [9]		8051 MCU				GPS						Basic waypoint				5-10m							GSM					Early GPS navigation concept		Modern GPS module (NEO-M8N)
+Bakker et al. (2010) [10]		Not specified			Wheel encoders			Pure pursuit				N/A (theoretical)				None				Path-following theory				Implements practical GPS tracking
+Park et al. (2018) [11]			Automotive ECU			DGPS, IMU				Lateral control				20cm							CAN bus				Vehicle stability					Simplified Arduino implementation
+Receveur et al. (2020) [12]		Not specified			Virtual sensors			GA + potential fields		Simulation						None				Advanced path planning				Practical fuzzy implementation
+Alia et al. (2015) [13]			x86 processor			GPS, IMU				Clothoid tentacles			30cm							None				Smooth path generation				Low-cost alternative
+Omrane et al. (2016) [15]		PIC16F877A				Ultrasonic				Fuzzy navigation			20cm (local)					None				Fuzzy obstacle avoidance			Applies fuzzy to GPS errors
+Sousa et al. (2025) [16]		Industrial PLC			LiDAR, RGB-D			Dynamic avoidance			<10cm							Wi-Fi 6				Warehouse robotics					Focuses on pure trajectory
+Khan et al. (2023) [19]			Not specified			Virtual					Z-number fuzzy				Simulation						None				Advanced uncertainty				Real hardware implementation
+Sahu et al. (2015) [20]			Not specified			Simulation				Fuzzy selection				N/A								None				Model optimization					Practical Arduino platform
+TerraDrive						Arduino Mega 2560		NEO-M8N GPS				Fuzzy GPS tracking			1-2m							HC-12 RF			Low-cost fuzzy-GPS fusion			Unique combination of all columns
+
+
