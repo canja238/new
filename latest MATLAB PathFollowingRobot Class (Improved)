@@ -11,13 +11,13 @@ classdef PathFollowingRobot < handle
         WaypointPlot
         LastPositionTime
         PositionHistory
-        LinearSpeed = 0.3333; % meters per second
-        DeltaT = 0.5; % Reduced from 0.775 for more frequent updates
-        MinSatellites = 4; % Minimum satellites for valid GPS
-        LastValidGPS = [0, 0]; % Last valid GPS position
-        GPSValid = false;
-        MotorRampRate = 10; % PWM units per second
-        LastMotorCommand = [0, 0];
+        LinearSpeed = 0.3333 % meters per second
+        DeltaT = 0.775 % seconds
+        LastMotorCommand = [0, 0]
+        DataLog
+        LogFile = 'robot_log.csv'
+        MinWaypointDistance = 0.5 % meters
+        MaxWaypointDistance = 3.0 % meters
     end
     
     methods
@@ -27,7 +27,7 @@ classdef PathFollowingRobot < handle
             configureTerminator(obj.SerialPort, "LF");
             flush(obj.SerialPort);
             
-            % Load waypoints (your waypoints array here)
+            % Load waypoints
             obj.Waypoints = [
 7.214920000, 124.249217000; 7.214920006, 124.249217231; 7.214920012, 124.249217462;  
 7.214920018, 124.249217694; 7.214920024, 124.249217925; 7.214920030, 124.249218156;  
@@ -961,8 +961,11 @@ classdef PathFollowingRobot < handle
             obj.Running = false;
             obj.PositionHistory = [];
             obj.LastPositionTime = datetime('now');
+            obj.DataLog = table('Size',[0 8],...
+                'VariableTypes',{'datetime','double','double','double','double','double','double','double'},...
+                'VariableNames',{'time','lat','lon','speed','heading','targetIdx','leftPWM','rightPWM'});
             
-            % Initialize fuzzy logic system
+            % Initialize fuzzy system
             obj.initializeFuzzySystem();
             
             % Initialize map visualization
@@ -978,7 +981,6 @@ classdef PathFollowingRobot < handle
                 end
                 obj.FuzzySystem = readfis('path_following.fis');
                 
-                % Verify FIS is properly loaded
                 if isempty(obj.FuzzySystem.Inputs) || isempty(obj.FuzzySystem.Outputs)
                     error('FIS not properly initialized');
                 end
@@ -988,81 +990,79 @@ classdef PathFollowingRobot < handle
         end
         
         function createFuzzySystem(obj)
-            % Create new FIS with improved rules
             fis = mamfis('Name', 'path_following');
             
-            % Distance input (meters)
-            fis = addInput(fis, [0 10], 'Name', 'distance');
-            fis = addMF(fis, 'distance', 'gaussmf', [0.5 0], 'Name', 'VeryClose');
-            fis = addMF(fis, 'distance', 'gaussmf', [1.0 2.5], 'Name', 'Close');
-            fis = addMF(fis, 'distance', 'gaussmf', [2.0 5.0], 'Name', 'Medium');
-            fis = addMF(fis, 'distance', 'gaussmf', [3.0 10], 'Name', 'Far');
+            % Enhanced distance error input with more granularity
+            fis = addInput(fis, [0 10], 'Name', 'distance_error');
+            fis = addMF(fis, 'distance_error', 'trapmf', [0 0 1 2], 'Name', 'VeryClose');
+            fis = addMF(fis, 'distance_error', 'trimf', [1 3 5], 'Name', 'Close');
+            fis = addMF(fis, 'distance_error', 'trimf', [3 5 7], 'Name', 'Medium');
+            fis = addMF(fis, 'distance_error', 'trapmf', [5 7 10 10], 'Name', 'Far');
             
-            % Heading error input (degrees)
+            % Enhanced heading error with more granularity
             fis = addInput(fis, [-180 180], 'Name', 'heading_error');
-            fis = addMF(fis, 'heading_error', 'gaussmf', [30 -180], 'Name', 'HardLeft');
-            fis = addMF(fis, 'heading_error', 'gaussmf', [20 -90], 'Name', 'Left');
-            fis = addMF(fis, 'heading_error', 'gaussmf', [10 0], 'Name', 'Straight');
-            fis = addMF(fis, 'heading_error', 'gaussmf', [20 90], 'Name', 'Right');
-            fis = addMF(fis, 'heading_error', 'gaussmf', [30 180], 'Name', 'HardRight');
+            fis = addMF(fis, 'heading_error', 'trapmf', [-180 -180 -90 -45], 'Name', 'HardLeft');
+            fis = addMF(fis, 'heading_error', 'trimf', [-90 -45 0], 'Name', 'Left');
+            fis = addMF(fis, 'heading_error', 'trimf', [-20 0 20], 'Name', 'Straight');
+            fis = addMF(fis, 'heading_error', 'trimf', [0 45 90], 'Name', 'Right');
+            fis = addMF(fis, 'heading_error', 'trapmf', [45 90 180 180], 'Name', 'HardRight');
             
-            % PWM outputs (-100 to 100)
+            % More granular motor outputs
             fis = addOutput(fis, [-100 100], 'Name', 'pwm_left');
-            fis = addMF(fis, 'pwm_left', 'trimf', [-100 -100 -50], 'Name', 'FullReverse');
-            fis = addMF(fis, 'pwm_left', 'trimf', [-100 -50 0], 'Name', 'Reverse');
-            fis = addMF(fis, 'pwm_left', 'trimf', [-30 0 30], 'Name', 'Stop');
-            fis = addMF(fis, 'pwm_left', 'trimf', [0 50 100], 'Name', 'Forward');
-            fis = addMF(fis, 'pwm_left', 'trimf', [50 100 100], 'Name', 'FullForward');
+            fis = addMF(fis, 'pwm_left', 'trapmf', [-100 -100 -80 -60], 'Name', 'FullReverse');
+            fis = addMF(fis, 'pwm_left', 'trimf', [-80 -40 0], 'Name', 'Reverse');
+            fis = addMF(fis, 'pwm_left', 'trimf', [-30 0 30], 'Name', 'Slow');
+            fis = addMF(fis, 'pwm_left', 'trimf', [0 40 80], 'Name', 'Forward');
+            fis = addMF(fis, 'pwm_left', 'trapmf', [60 80 100 100], 'Name', 'FullForward');
             
             fis = addOutput(fis, [-100 100], 'Name', 'pwm_right');
-            fis = addMF(fis, 'pwm_right', 'trimf', [-100 -100 -50], 'Name', 'FullReverse');
-            fis = addMF(fis, 'pwm_right', 'trimf', [-100 -50 0], 'Name', 'Reverse');
-            fis = addMF(fis, 'pwm_right', 'trimf', [-30 0 30], 'Name', 'Stop');
-            fis = addMF(fis, 'pwm_right', 'trimf', [0 50 100], 'Name', 'Forward');
-            fis = addMF(fis, 'pwm_right', 'trimf', [50 100 100], 'Name', 'FullForward');
+            fis = addMF(fis, 'pwm_right', 'trapmf', [-100 -100 -80 -60], 'Name', 'FullReverse');
+            fis = addMF(fis, 'pwm_right', 'trimf', [-80 -40 0], 'Name', 'Reverse');
+            fis = addMF(fis, 'pwm_right', 'trimf', [-30 0 30], 'Name', 'Slow');
+            fis = addMF(fis, 'pwm_right', 'trimf', [0 40 80], 'Name', 'Forward');
+            fis = addMF(fis, 'pwm_right', 'trapmf', [60 80 100 100], 'Name', 'FullForward');
             
-            % Improved rule base
+            % Enhanced rule base
             ruleList = [
-                % Distance | Heading Error | Left PWM | Right PWM | Weight | Connection
-                1   1   5   1   1   1;  % VeryClose HardLeft - FullForward Left, FullReverse Right
-                1   2   4   2   1   1;  % VeryClose Left - Forward Left, Reverse Right
-                1   3   3   3   1   1;  % VeryClose Straight - Stop both
-                1   4   2   4   1   1;  % VeryClose Right - Reverse Left, Forward Right
-                1   5   1   5   1   1;  % VeryClose HardRight - FullReverse Left, FullForward Right
+                1  1  5  1  1  1;  % VeryClose + HardLeft
+                1  2  5  2  1  1;  % VeryClose + Left
+                1  3  4  3  1  1;  % VeryClose + Straight
+                1  4  2  4  1  1;  % VeryClose + Right
+                1  5  1  5  1  1;  % VeryClose + HardRight
                 
-                2   1   4   1   1   1;  % Close HardLeft - Forward Left, FullReverse Right
-                2   2   4   2   1   1;  % Close Left - Forward Left, Reverse Right
-                2   3   4   4   1   1;  % Close Straight - Forward both
-                2   4   2   4   1   1;  % Close Right - Reverse Left, Forward Right
-                2   5   1   4   1   1;  % Close HardRight - FullReverse Left, Forward Right
+                2  1  5  1  1  1;  % Close + HardLeft
+                2  2  4  2  1  1;  % Close + Left
+                2  3  3  3  1  1;  % Close + Straight
+                2  4  2  4  1  1;  % Close + Right
+                2  5  1  5  1  1;  % Close + HardRight
                 
-                3   1   4   2   1   1;  % Medium HardLeft - Forward Left, Reverse Right
-                3   2   4   3   1   1;  % Medium Left - Forward Left, Stop Right
-                3   3   5   5   1   1;  % Medium Straight - FullForward both
-                3   4   3   4   1   1;  % Medium Right - Stop Left, Forward Right
-                3   5   2   4   1   1;  % Medium HardRight - Reverse Left, Forward Right
+                3  1  4  1  1  1;  % Medium + HardLeft
+                3  2  4  2  1  1;  % Medium + Left
+                3  3  4  3  1  1;  % Medium + Straight
+                3  4  3  4  1  1;  % Medium + Right
+                3  5  1  4  1  1;  % Medium + HardRight
                 
-                4   1   5   3   1   1;  % Far HardLeft - FullForward Left, Stop Right
-                4   2   5   4   1   1;  % Far Left - FullForward Left, Forward Right
-                4   3   5   5   1   1;  % Far Straight - FullForward both
-                4   4   4   5   1   1;  % Far Right - Forward Left, FullForward Right
-                4   5   3   5   1   1;  % Far HardRight - Stop Left, FullForward Right
+                4  1  4  1  1  1;  % Far + HardLeft
+                4  2  4  2  1  1;  % Far + Left
+                4  3  5  3  1  1;  % Far + Straight
+                4  4  3  4  1  1;  % Far + Right
+                4  5  1  5  1  1;  % Far + HardRight
             ];
             
             fis = addRule(fis, ruleList);
             writeFIS(fis, 'path_following');
             
-            % Plot membership functions for verification
+            % Plot membership functions
             figure;
-            subplot(2,2,1); plotmf(fis, 'input', 1); title('Distance');
+            subplot(2,2,1); plotmf(fis, 'input', 1); title('Distance Error');
             subplot(2,2,2); plotmf(fis, 'input', 2); title('Heading Error');
             subplot(2,2,3); plotmf(fis, 'output', 1); title('PWM Left');
             subplot(2,2,4); plotmf(fis, 'output', 2); title('PWM Right');
             
+            % Plot rule surface
             figure;
-            gensurf(fis, [1 2], 1); title('Left Motor Control Surface');
-            figure;
-            gensurf(fis, [1 2], 2); title('Right Motor Control Surface');
+            gensurf(fis);
+            title('Control Surface');
         end
         
         function initializeMap(obj)
@@ -1073,17 +1073,12 @@ classdef PathFollowingRobot < handle
             hold on;
             obj.WaypointPlot = geoscatter(lat, lon, 'filled', 'MarkerFaceColor', 'red');
             
-            obj.PathPlot = geoplot(nan, nan, 'b-', 'LineWidth', 1.5);
-            obj.RobotPlot = geoscatter(nan, nan, 100, 'filled', 'MarkerFaceColor', 'blue');
-            
-            % Add target waypoint marker
-            targetLat = obj.Waypoints(obj.CurrentWaypointIndex, 1);
-            targetLon = obj.Waypoints(obj.CurrentWaypointIndex, 2);
-            geoscatter(targetLat, targetLon, 100, 'filled', 'MarkerFaceColor', 'yellow');
+            obj.PathPlot = geoplot(lat(1), lon(1), 'b-', 'LineWidth', 1.5);
+            obj.RobotPlot = geoscatter(lat(1), lon(1), 100, 'filled', 'MarkerFaceColor', 'blue');
             
             geobasemap('satellite');
             title('Robot Path Monitoring');
-            legend('Planned Path', 'Waypoints', 'Robot Path', 'Robot Position', 'Current Target');
+            legend('Planned Path', 'Waypoints', 'Robot Path', 'Robot Position');
             drawnow;
         end
         
@@ -1093,7 +1088,6 @@ classdef PathFollowingRobot < handle
         end
         
         function updateMap(obj, currentLat, currentLon)
-            % Update path plot
             xData = obj.PathPlot.XData;
             yData = obj.PathPlot.YData;
             
@@ -1101,40 +1095,16 @@ classdef PathFollowingRobot < handle
             obj.PathPlot.YData = [yData, currentLon];
             obj.PositionHistory = [obj.PositionHistory; currentLat, currentLon];
             
-            % Update robot position
             obj.RobotPlot.LatitudeData = currentLat;
             obj.RobotPlot.LongitudeData = currentLon;
             
-            % Update target waypoint marker
             targetLat = obj.Waypoints(obj.CurrentWaypointIndex, 1);
             targetLon = obj.Waypoints(obj.CurrentWaypointIndex, 2);
+            geoscatter(targetLat, targetLon, 100, 'filled', 'MarkerFaceColor', 'yellow');
             
-            % Find and update the target marker
-            figChildren = get(gca, 'Children');
-            for i = 1:length(figChildren)
-                if strcmp(figChildren(i).DisplayName, 'Current Target')
-                    figChildren(i).LatitudeData = targetLat;
-                    figChildren(i).LongitudeData = targetLon;
-                    break;
-                end
-            end
-            
-            % Adjust map limits with buffer
-            allLats = [currentLat; obj.Waypoints(:,1)];
-            allLons = [currentLon; obj.Waypoints(:,2)];
-            
-            latBuffer = 0.0002; % ~20 meters in latitude
-            lonBuffer = 0.0002; % ~20 meters in longitude (adjust for your location)
-            
-            latLim = [min(allLats)-latBuffer, max(allLats)+latBuffer];
-            lonLim = [min(allLons)-lonBuffer, max(allLons)+lonBuffer];
-            
-            try
-                geolimits(latLim, lonLim);
-            catch
-                % Sometimes geolimits can fail if the area is too small
-                geolimits([latLim(1)-0.0001, latLim(2)+0.0001], [lonLim(1)-0.0001, lonLim(2)+0.0001]);
-            end
+            latLim = [min([currentLat; obj.Waypoints(:,1)])-0.0001, max([currentLat; obj.Waypoints(:,1)])+0.0001];
+            lonLim = [min([currentLon; obj.Waypoints(:,2)])-0.0001, max([currentLon; obj.Waypoints(:,2)])+0.0001];
+            geolimits(latLim, lonLim);
             
             drawnow;
         end
@@ -1146,111 +1116,162 @@ classdef PathFollowingRobot < handle
         
         function stop(obj)
             obj.Running = false;
-            % Send stop command to robot with ramping
-            obj.sendMotorCommand([0, 0]);
-        end
-        
-        function sendMotorCommand(obj, command)
-            % Apply ramping to motor commands
-            maxChange = obj.MotorRampRate * obj.DeltaT;
+            % Send stop command to robot
+            writeline(obj.SerialPort, "CMD:0,0");
             
-            % Left motor ramping
-            diff = command(1) - obj.LastMotorCommand(1);
-            if abs(diff) > maxChange
-                command(1) = obj.LastMotorCommand(1) + sign(diff) * maxChange;
-            end
-            
-            % Right motor ramping
-            diff = command(2) - obj.LastMotorCommand(2);
-            if abs(diff) > maxChange
-                command(2) = obj.LastMotorCommand(2) + sign(diff) * maxChange;
-            end
-            
-            % Send command
-            cmdStr = sprintf("CMD:%d,%d", round(command(1)), round(command(2)));
-            writeline(obj.SerialPort, cmdStr);
-            obj.LastMotorCommand = command;
+            % Save data log
+            writetable(obj.DataLog, obj.LogFile);
+            disp(['Data log saved to ' obj.LogFile]);
         end
         
         function run(obj)
+            lastDistance = Inf;
+            stuckCounter = 0;
+            
             while obj.Running
                 if obj.SerialPort.NumBytesAvailable > 0
                     data = readline(obj.SerialPort);
                     
                     if startsWith(data, "GPS:")
                         try
-                            gpsData = sscanf(data, "GPS:%f,%f,%f,%f,%d");
-                            if length(gpsData) == 5
+                            gpsData = sscanf(data, "GPS:%f,%f,%f,%f,%f");
+                            if length(gpsData) >= 4
                                 currentLat = gpsData(1);
                                 currentLon = gpsData(2);
                                 speed = gpsData(3);
                                 heading = gpsData(4);
-                                satellites = gpsData(5);
+                                hdop = length(gpsData) >= 5 ? gpsData(5) : 0;
                                 
-                                % Validate GPS data
-                                if satellites >= obj.MinSatellites && ...
-                                   currentLat ~= 0 && currentLon ~= 0
-                                    obj.GPSValid = true;
-                                    obj.LastValidGPS = [currentLat, currentLon];
-                                    
-                                    % Update map with valid data
-                                    obj.updateMap(currentLat, currentLon);
-                                    
-                                    % Calculate distance and bearing to current waypoint
-                                    target = obj.Waypoints(obj.CurrentWaypointIndex, :);
-                                    distance = obj.calculateDistance(currentLat, currentLon, target(1), target(2));
-                                    bearing = obj.calculateBearing(currentLat, currentLon, target(1), target(2));
-                                    headingError = obj.wrapTo180(bearing - heading);
-                                    
-                                    % Dynamic waypoint threshold based on speed
-                                    expectedDistance = obj.LinearSpeed * obj.DeltaT;
-                                    waypointThreshold = max(0.00005, expectedDistance * 0.75); % ~5cm minimum
-                                    
-                                    % Check if reached waypoint
-                                    if distance < waypointThreshold
-                                        obj.CurrentWaypointIndex = min(obj.CurrentWaypointIndex + 1, size(obj.Waypoints, 1));
-                                        if obj.CurrentWaypointIndex == size(obj.Waypoints, 1)
-                                            obj.stop();
-                                            disp('Final waypoint reached!');
-                                            return;
+                                % Log data
+                                newEntry = {datetime('now'), currentLat, currentLon, ...
+                                           speed, heading, obj.CurrentWaypointIndex, ...
+                                           obj.LastMotorCommand(1), obj.LastMotorCommand(2)};
+                                obj.DataLog = [obj.DataLog; newEntry];
+                                
+                                % Add low-pass filtering to position data
+                                if ~isempty(obj.PositionHistory)
+                                    alpha = 0.2; % Smoothing factor
+                                    currentLat = alpha*currentLat + (1-alpha)*obj.PositionHistory(end,1);
+                                    currentLon = alpha*currentLon + (1-alpha)*obj.PositionHistory(end,2);
+                                end
+                                
+                                obj.updateMap(currentLat, currentLon);
+                                
+                                target = obj.Waypoints(obj.CurrentWaypointIndex, :);
+                                distance = obj.calculateDistance(currentLat, currentLon, target(1), target(2));
+                                
+                                % Dynamic waypoint threshold based on speed
+                                speedThreshold = max(obj.MinWaypointDistance, ...
+                                                   min(obj.MaxWaypointDistance, speed * 1.5));
+                                
+                                if distance < speedThreshold
+                                    % Check if we're moving toward the next waypoint
+                                    if obj.CurrentWaypointIndex < size(obj.Waypoints, 1)
+                                        nextTarget = obj.Waypoints(obj.CurrentWaypointIndex + 1, :);
+                                        bearingToNext = obj.calculateBearing(currentLat, currentLon, nextTarget(1), nextTarget(2));
+                                        angleDiff = abs(obj.wrapTo180(bearingToNext - heading));
+                                        
+                                        % Only advance if we're reasonably aligned with next segment
+                                        if angleDiff < 45 || distance < speedThreshold/2
+                                            obj.CurrentWaypointIndex = obj.CurrentWaypointIndex + 1;
+                                            stuckCounter = 0;
+                                            disp(['Reached waypoint ' num2str(obj.CurrentWaypointIndex-1)]);
                                         end
-                                        % Update map with new target waypoint
-                                        obj.updateMap(currentLat, currentLon);
+                                    else
+                                        obj.stop();
+                                        disp('Final waypoint reached!');
+                                        return;
                                     end
-                                    
-                                    % Speed adjustment based on distance
-                                    % Max speed at >2m, reduce linearly below that
-                                    speedFactor = min(1, distance / 2.0);
-                                    speedFactor = max(0.3, speedFactor); % Minimum 30% speed
-                                    
-                                    % Fuzzy logic control
-                                    inputs = [min(10, distance), headingError]; % Cap distance at 10m
+                                end
+                                
+                                % Calculate lookahead point (2 waypoints ahead)
+                                lookaheadIndex = min(obj.CurrentWaypointIndex + 2, size(obj.Waypoints, 1));
+                                lookaheadPoint = obj.Waypoints(lookaheadIndex, :);
+                                
+                                % Pure Pursuit algorithm
+                                lookaheadDistance = max(1.0, min(3.0, speed * 1.5));
+                                
+                                % Calculate desired heading to lookahead point
+                                bearing = obj.calculateBearing(currentLat, currentLon, lookaheadPoint(1), lookaheadPoint(2));
+                                headingError = obj.wrapTo180(bearing - heading);
+                                
+                                % Calculate cross-track error
+                                [cte, isLeft] = obj.calculateCrossTrackError(...
+                                    currentLat, currentLon, ...
+                                    obj.Waypoints(obj.CurrentWaypointIndex, :), ...
+                                    lookaheadPoint);
+                                
+                                % Combine heading error and cross-track error
+                                combinedError = headingError + 5 * cte * (isLeft*2 - 1);
+                                
+                                % Calculate path curvature for speed adjustment
+                                if obj.CurrentWaypointIndex > 1 && obj.CurrentWaypointIndex < size(obj.Waypoints, 1)
+                                    prevPoint = obj.Waypoints(obj.CurrentWaypointIndex-1, :);
+                                    nextPoint = obj.Waypoints(obj.CurrentWaypointIndex+1, :);
+                                    angle = obj.calculateAngle(prevPoint, target, nextPoint);
+                                    speedFactor = max(0.3, min(1.0, 1 - abs(angle)/180));
+                                else
+                                    speedFactor = 1.0;
+                                end
+                                
+                                % Scale speed based on distance and curvature
+                                speedPercentage = min(100, max(30, (distance / lookaheadDistance) * 100 * speedFactor));
+                                
+                                % Fuzzy logic control
+                                try
+                                    inputs = [distance, combinedError];
                                     outputs = evalfis(obj.FuzzySystem, inputs);
                                     
-                                    % Scale outputs by speed factor
-                                    leftPWM = outputs(1) * speedFactor;
-                                    rightPWM = outputs(2) * speedFactor;
+                                    % Scale outputs by speed percentage and limit acceleration
+                                    maxChange = 20; % Max PWM change per cycle
+                                    lastLeft = obj.LastMotorCommand(1);
+                                    lastRight = obj.LastMotorCommand(2);
+                                    
+                                    leftPWM = round(outputs(1) * (speedPercentage/100));
+                                    rightPWM = round(outputs(2) * (speedPercentage/100));
+                                    
+                                    % Limit rate of change
+                                    leftPWM = lastLeft + sign(leftPWM - lastLeft) * ...
+                                             min(maxChange, abs(leftPWM - lastLeft));
+                                    rightPWM = lastRight + sign(rightPWM - lastRight) * ...
+                                              min(maxChange, abs(rightPWM - lastRight));
+                                    
+                                    obj.LastMotorCommand = [leftPWM, rightPWM];
+                                    
+                                    % Check for lack of progress
+                                    if distance < lastDistance * 0.9 && speed < 0.1
+                                        stuckCounter = stuckCounter + 1;
+                                        if stuckCounter > 5
+                                            % Recovery maneuver
+                                            writeline(obj.SerialPort, "CMD:-40,-40");
+                                            pause(1);
+                                            writeline(obj.SerialPort, "CMD:40,-40");
+                                            pause(1);
+                                            stuckCounter = 0;
+                                        end
+                                    else
+                                        stuckCounter = max(0, stuckCounter - 1);
+                                    end
+                                    lastDistance = distance;
                                     
                                     % Send motor commands
-                                    obj.sendMotorCommand([leftPWM, rightPWM]);
-                                else
-                                    obj.GPSValid = false;
-                                    % If GPS is invalid, slow down but don't stop completely
-                                    obj.sendMotorCommand(obj.LastMotorCommand * 0.7);
+                                    cmdStr = sprintf("CMD:%d,%d", leftPWM, rightPWM);
+                                    writeline(obj.SerialPort, cmdStr);
+                                catch ME
+                                    fprintf('Fuzzy logic error: %s\n', ME.message);
+                                    writeline(obj.SerialPort, "CMD:0,0");
                                 end
                             end
                         catch ME
                             fprintf('Error processing GPS data: %s\n', ME.message);
-                            obj.GPSValid = false;
                         end
                     end
                 end
-                pause(obj.DeltaT);
+                pause(0.1);
             end
         end
         
         function distance = calculateDistance(~, lat1, lon1, lat2, lon2)
-            % Haversine formula for accurate distance calculation
             R = 6371000; % Earth radius in meters
             dLat = deg2rad(lat2-lat1);
             dLon = deg2rad(lon2-lon1);
@@ -1262,7 +1283,6 @@ classdef PathFollowingRobot < handle
         end
         
         function bearing = calculateBearing(~, lat1, lon1, lat2, lon2)
-            % Calculate bearing between two points
             lat1 = deg2rad(lat1);
             lon1 = deg2rad(lon1);
             lat2 = deg2rad(lat2);
@@ -1273,8 +1293,35 @@ classdef PathFollowingRobot < handle
             bearing = rad2deg(atan2(y, x));
         end
         
+        function [cte, isLeft] = calculateCrossTrackError(~, lat, lon, point1, point2)
+            % Convert to radians
+            lat1 = deg2rad(point1(1));
+            lon1 = deg2rad(point1(2));
+            lat2 = deg2rad(point2(1));
+            lon2 = deg2rad(point2(2));
+            latP = deg2rad(lat);
+            lonP = deg2rad(lon);
+            
+            % Calculate cross-track distance
+            d13 = 2 * asin(sqrt(sin((lat1-latP)/2)^2 + cos(lat1)*cos(latP)*sin((lon1-lonP)/2)^2));
+            theta13 = atan2(sin(lon1-lonP)*cos(lat1), cos(latP)*sin(lat1)-sin(latP)*cos(lat1)*cos(lon1-lonP));
+            theta12 = atan2(sin(lon2-lon1)*cos(lat2), cos(lat1)*sin(lat2)-sin(lat1)*cos(lat2)*cos(lon2-lon1));
+            
+            cte = asin(sin(d13)*sin(theta13-theta12)) * 6371000; % in meters
+            
+            % Determine which side of the line the point is on
+            d = (lon - lon1) * (lat2 - lat1) - (lat - lat1) * (lon2 - lon1);
+            isLeft = d > 0;
+        end
+        
+        function angle = calculateAngle(~, point1, point2, point3)
+            % Calculate the angle between three points (point2 is the vertex)
+            bearing1 = obj.calculateBearing(point2(1), point2(2), point1(1), point1(2));
+            bearing2 = obj.calculateBearing(point2(1), point2(2), point3(1), point3(2));
+            angle = abs(obj.wrapTo180(bearing1 - bearing2));
+        end
+        
         function angle = wrapTo180(~, angle)
-            % Wrap angle to [-180, 180] range
             angle = mod(angle + 180, 360) - 180;
         end
         
@@ -1286,7 +1333,6 @@ classdef PathFollowingRobot < handle
         end
     end
 end
-
 
 % List available ports
 % serialportlist
