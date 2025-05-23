@@ -4,9 +4,6 @@
 #define HC12_TX_PIN 11
 SoftwareSerial HC12_SERIAL(HC12_RX_PIN, HC12_TX_PIN);
 
-// GPS data validation
-const int MIN_SATELLITES = 4; // Minimum satellites for valid GPS data
-
 void setup() {
   Serial.begin(115200);
   HC12_SERIAL.begin(9600);
@@ -18,28 +15,20 @@ void setup() {
 }
 
 void loop() {
-  // Forward GPS data from robot to MATLAB with validation
+  // Forward GPS data from robot to MATLAB
   if (HC12_SERIAL.available()) {
     String data = HC12_SERIAL.readStringUntil('\n');
-    data.trim();
-    
     if (data.startsWith("GPS:")) {
-      // Parse and validate GPS data
-      int firstComma = data.indexOf(',');
-      int secondComma = data.indexOf(',', firstComma + 1);
-      int thirdComma = data.indexOf(',', secondComma + 1);
-      int fourthComma = data.indexOf(',', thirdComma + 1);
+      // Validate GPS data format
+      int commas = 0;
+      for (int i = 0; i < data.length(); i++) {
+        if (data.charAt(i) == ',') commas++;
+      }
       
-      if (firstComma != -1 && secondComma != -1 && thirdComma != -1 && fourthComma != -1) {
-        int satellites = data.substring(fourthComma + 1).toInt();
-        
-        if (satellites >= MIN_SATELLITES) {
-          Serial.println(data);
-        } else {
-          Serial.println("GPS:0,0,0,0,0"); // Invalid data marker
-        }
+      if (commas >= 3) {
+        Serial.println(data);
       } else {
-        Serial.println("GPS:0,0,0,0,0"); // Invalid data marker
+        Serial.println("GPS:0,0,0,0,0"); // Send invalid data marker
       }
     }
   }
@@ -47,8 +36,6 @@ void loop() {
   // Forward commands from MATLAB to robot
   if (Serial.available()) {
     String command = Serial.readStringUntil('\n');
-    command.trim();
-    
     if (command.startsWith("CMD:")) {
       HC12_SERIAL.println(command);
     }
