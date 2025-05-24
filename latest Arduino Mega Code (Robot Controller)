@@ -132,8 +132,8 @@ void executeMotorCommand() {
     digitalWrite(motorPin4, LOW);
   }
   
-  analogWrite(ENA, constrain(abs(currentCommand.leftPWM), 0, 255);
-  analogWrite(ENB, constrain(abs(currentCommand.rightPWM), 0, 255);
+  analogWrite(ENA, constrain(abs(currentCommand.leftPWM) * 2.55, 0, 255));
+  analogWrite(ENB, constrain(abs(currentCommand.rightPWM) * 2.55, 0, 255));
   
   DEBUG_PRINT("Motors: L=");
   DEBUG_PRINT(currentCommand.leftPWM);
