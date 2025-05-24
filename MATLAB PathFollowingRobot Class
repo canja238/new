@@ -1161,16 +1161,16 @@ function createFuzzySystem()
     fis = addMF(fis, 'heading_error', 'trimf', [45 180 180], 'Name', 'Right');
     
     % Add pwm_left output (3 membership functions)
-    fis = addOutput(fis, [-100 100], 'Name', 'pwm_left');
-    fis = addMF(fis, 'pwm_left', 'trimf', [-100 -100 0], 'Name', 'Reverse');
-    fis = addMF(fis, 'pwm_left', 'trimf', [-50 0 50], 'Name', 'Slow');
-    fis = addMF(fis, 'pwm_left', 'trimf', [0 100 100], 'Name', 'Forward');
+    fis = addOutput(fis, [-255 255], 'Name', 'pwm_left');
+    fis = addMF(fis, 'pwm_left', 'trimf', [-255 -255 0], 'Name', 'Reverse');
+    fis = addMF(fis, 'pwm_left', 'trimf', [-125 0 125], 'Name', 'Slow');
+    fis = addMF(fis, 'pwm_left', 'trimf', [0 255 255], 'Name', 'Forward');
     
     % Add pwm_right output (same as pwm_left)
-    fis = addOutput(fis, [-100 100], 'Name', 'pwm_right');
-    fis = addMF(fis, 'pwm_right', 'trimf', [-100 -100 0], 'Name', 'Reverse');
-    fis = addMF(fis, 'pwm_right', 'trimf', [-50 0 50], 'Name', 'Slow');
-    fis = addMF(fis, 'pwm_right', 'trimf', [0 100 100], 'Name', 'Forward');
+    fis = addOutput(fis, [-255 255], 'Name', 'pwm_right');
+    fis = addMF(fis, 'pwm_right', 'trimf', [-255 -255 0], 'Name', 'Reverse');
+    fis = addMF(fis, 'pwm_right', 'trimf', [-125 0 125], 'Name', 'Slow');
+    fis = addMF(fis, 'pwm_right', 'trimf', [0 255 255], 'Name', 'Forward');
     
     % Simplified 3x3 Rule Base
     ruleList = [
