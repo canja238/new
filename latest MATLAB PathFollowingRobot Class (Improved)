@@ -13,7 +13,8 @@ classdef PathFollowingRobot < handle
         PositionHistory
         LinearSpeed = 0.3333 % meters per second
         DeltaT = 0.775 % seconds
-        MaxPWM = 255
+        PositionThreshold = 0.00005 % degrees (~5 meters)
+        HeadingThreshold = 15 % degrees
     end
     
     methods
@@ -25,12 +26,10 @@ classdef PathFollowingRobot < handle
             
             % Load waypoints
             obj.Waypoints = [
-                7.214920000, 124.249217000; 7.214920006, 124.249217231; 
-                7.214920012, 124.249217462; 7.214920018, 124.249217694;
-                7.214920024, 124.249217925; 7.214920030, 124.249218156;
-                7.214920036, 124.249218387; 7.214920042, 124.249218618;
-                7.214920048, 124.249218849; 7.214920054, 124.249219080;
-                7.214920060, 124.249219311; 7.214920066, 124.249219542;
+                7.214920000, 124.249217000;
+                7.214920006, 124.249217231;
+                % ... (rest of your waypoints)
+                7.214927296, 124.249497897;
             ];
             
             obj.CurrentWaypointIndex = 1;
@@ -39,16 +38,131 @@ classdef PathFollowingRobot < handle
             obj.LastPositionTime = datetime('now');
             
             % Initialize fuzzy logic system
-            try
-                obj.FuzzySystem = obj.create3DFuzzySystem();
-                disp('Fuzzy system successfully initialized');
-            catch ME
-                error('Failed to initialize fuzzy system: %s', ME.message);
-            end
+            obj.initializeFuzzySystem();
             
             % Initialize map visualization
             obj.initializeMap();
+            
             disp('Robot initialized and ready to run');
+        end
+        
+        function initializeFuzzySystem(obj)
+            % Create new FIS using modern syntax
+            fis = mamfis('Name', 'path_following');
+            
+            % Add xError input (latitude error in degrees)
+            fis = addInput(fis, [-0.0005 0.0005], 'Name', 'xError');
+            fis = addMF(fis, 'xError', 'trimf', [-0.0005 -0.0005 -0.00025], 'Name', 'Left');
+            fis = addMF(fis, 'xError', 'trimf', [-0.0003 0 0.0003], 'Name', 'Center');
+            fis = addMF(fis, 'xError', 'trimf', [0.00025 0.0005 0.0005], 'Name', 'Right');
+            
+            % Add yError input (longitude error in degrees)
+            fis = addInput(fis, [-0.0005 0.0005], 'Name', 'yError');
+            fis = addMF(fis, 'yError', 'trimf', [-0.0005 -0.0005 -0.00025], 'Name', 'Behind');
+            fis = addMF(fis, 'yError', 'trimf', [-0.0003 0 0.0003], 'Name', 'OnTrack');
+            fis = addMF(fis, 'yError', 'trimf', [0.00025 0.0005 0.0005], 'Name', 'Ahead');
+            
+            % Add heading_error input
+            fis = addInput(fis, [-180 180], 'Name', 'heading_error');
+            fis = addMF(fis, 'heading_error', 'trimf', [-180 -180 -45], 'Name', 'Left');
+            fis = addMF(fis, 'heading_error', 'trimf', [-30 0 30], 'Name', 'Straight');
+            fis = addMF(fis, 'heading_error', 'trimf', [45 180 180], 'Name', 'Right');
+            
+            % Add pwm_left output
+            fis = addOutput(fis, [-255 255], 'Name', 'pwm_left');
+            fis = addMF(fis, 'pwm_left', 'trimf', [-255 -255 -127], 'Name', 'Reverse');
+            fis = addMF(fis, 'pwm_left', 'trimf', [-191 0 191], 'Name', 'Slow');
+            fis = addMF(fis, 'pwm_left', 'trimf', [127 255 255], 'Name', 'Forward');
+            
+            % Add pwm_right output
+            fis = addOutput(fis, [-255 255], 'Name', 'pwm_right');
+            fis = addMF(fis, 'pwm_right', 'trimf', [-255 -255 -127], 'Name', 'Reverse');
+            fis = addMF(fis, 'pwm_right', 'trimf', [-191 0 191], 'Name', 'Slow');
+            fis = addMF(fis, 'pwm_right', 'trimf', [127 255 255], 'Name', 'Forward');
+            
+            % Rule Base (3x3x3 = 27 rules)
+            ruleList = [
+            % xError: Left, yError: Behind, heading_error: Left
+            1 1 1 3 1 1 1;
+            % xError: Left, yError: Behind, heading_error: Straight
+            1 1 2 3 1 1 1;
+            % xError: Left, yError: Behind, heading_error: Right
+            1 1 3 3 3 1 1;
+            
+            % xError: Left, yError: OnTrack, heading_error: Left
+            1 2 1 3 1 1 1;
+            % xError: Left, yError: OnTrack, heading_error: Straight
+            1 2 2 3 2 1 1;
+            % xError: Left, yError: OnTrack, heading_error: Right
+            1 2 3 2 3 1 1;
+            
+            % xError: Left, yError: Ahead, heading_error: Left
+            1 3 1 1 1 1 1;
+            % xError: Left, yError: Ahead, heading_error: Straight
+            1 3 2 1 2 1 1;
+            % xError: Left, yError: Ahead, heading_error: Right
+            1 3 3 1 3 1 1;
+            
+            % xError: Center, yError: Behind, heading_error: Left
+            2 1 1 3 1 1 1;
+            % xError: Center, yError: Behind, heading_error: Straight
+            2 1 2 3 3 1 1;
+            % xError: Center, yError: Behind, heading_error: Right
+            2 1 3 1 3 1 1;
+            
+            % xError: Center, yError: OnTrack, heading_error: Left
+            2 2 1 2 1 1 1;
+            % xError: Center, yError: OnTrack, heading_error: Straight
+            2 2 2 3 3 1 1;
+            % xError: Center, yError: OnTrack, heading_error: Right
+            2 2 3 1 2 1 1;
+            
+            % xError: Center, yError: Ahead, heading_error: Left
+            2 3 1 1 1 1 1;
+            % xError: Center, yError: Ahead, heading_error: Straight
+            2 3 2 1 3 1 1;
+            % xError: Center, yError: Ahead, heading_error: Right
+            2 3 3 1 3 1 1;
+            
+            % xError: Right, yError: Behind, heading_error: Left
+            3 1 1 3 3 1 1;
+            % xError: Right, yError: Behind, heading_error: Straight
+            3 1 2 1 3 1 1;
+            % xError: Right, yError: Behind, heading_error: Right
+            3 1 3 1 3 1 1;
+            
+            % xError: Right, yError: OnTrack, heading_error: Left
+            3 2 1 3 2 1 1;
+            % xError: Right, yError: OnTrack, heading_error: Straight
+            3 2 2 2 3 1 1;
+            % xError: Right, yError: OnTrack, heading_error: Right
+            3 2 3 1 3 1 1;
+            
+            % xError: Right, yError: Ahead, heading_error: Left
+            3 3 1 1 1 1 1;
+            % xError: Right, yError: Ahead, heading_error: Straight
+            3 3 2 1 2 1 1;
+            % xError: Right, yError: Ahead, heading_error: Right
+            3 3 3 1 3 1 1;
+            ];
+            
+            fis = addRule(fis, ruleList);
+            obj.FuzzySystem = fis;
+            
+            % Plot membership functions
+            figure('Name', 'Fuzzy Membership Functions');
+            subplot(2,3,1); plotmf(fis, 'input', 1); title('xError (Latitude)');
+            subplot(2,3,2); plotmf(fis, 'input', 2); title('yError (Longitude)');
+            subplot(2,3,3); plotmf(fis, 'input', 3); title('Heading Error');
+            subplot(2,3,4); plotmf(fis, 'output', 1); title('PWM Left');
+            subplot(2,3,5); plotmf(fis, 'output', 2); title('PWM Right');
+            
+            % Plot rule surfaces
+            figure('Name', 'Control Surfaces');
+            subplot(2,2,1); gensurf(fis, [1 2], 1); title('xError & yError -> PWM Left');
+            subplot(2,2,2); gensurf(fis, [1 2], 2); title('xError & yError -> PWM Right');
+            subplot(2,2,3); gensurf(fis, [1 3], 1); title('xError & Heading -> PWM Left');
+            subplot(2,2,4); gensurf(fis, [2 3], 2); title('yError & Heading -> PWM Right');
         end
         
         function initializeMap(obj)
@@ -123,18 +237,22 @@ classdef PathFollowingRobot < handle
                                 
                                 % Get current target waypoint
                                 target = obj.Waypoints(obj.CurrentWaypointIndex, :);
+                                targetLat = target(1);
+                                targetLon = target(2);
                                 
-                                % Calculate errors (scaled by 1e6 for fuzzy logic)
-                                xError = (target(1) - currentLat) * 1e6;  % Latitude error
-                                yError = (target(2) - currentLon) * 1e6;  % Longitude error
-                                distance = sqrt(xError^2 + yError^2) / 1e6;
+                                % Calculate position errors
+                                xError = targetLat - currentLat; % Latitude error
+                                yError = targetLon - currentLon; % Longitude error
+                                
+                                % Calculate distance to waypoint
+                                distance = obj.calculateDistance(currentLat, currentLon, targetLat, targetLon);
                                 
                                 % Calculate bearing and heading error
-                                bearing = obj.calculateBearing(currentLat, currentLon, target(1), target(2));
+                                bearing = obj.calculateBearing(currentLat, currentLon, targetLat, targetLon);
                                 headingError = obj.wrapTo180(bearing - heading);
                                 
                                 % Check if reached waypoint
-                                if distance < max(0.00001, obj.LinearSpeed * obj.DeltaT/2)
+                                if distance < obj.PositionThreshold && abs(headingError) < obj.HeadingThreshold
                                     obj.CurrentWaypointIndex = min(obj.CurrentWaypointIndex + 1, size(obj.Waypoints, 1));
                                     if obj.CurrentWaypointIndex == size(obj.Waypoints, 1)
                                         obj.stop();
@@ -144,31 +262,34 @@ classdef PathFollowingRobot < handle
                                     continue;
                                 end
                                 
+                                % Scale errors for fuzzy system
+                                scaledXError = xError * 1e5; % Scale to reasonable range
+                                scaledYError = yError * 1e5; % Scale to reasonable range
+                                
                                 % Fuzzy logic control
-                                try
-                                    inputs = [xError, yError, headingError];
-                                    outputs = evalfis(obj.FuzzySystem, inputs);
-                                    
-                                    % Scale outputs to PWM range
-                                    leftPWM = round(outputs(1));
-                                    rightPWM = round(outputs(2));
-                                    
-                                    % Apply speed scaling based on distance
-                                    speedScale = min(1, max(0.3, distance*1e5));
-                                    leftPWM = round(leftPWM * speedScale);
-                                    rightPWM = round(rightPWM * speedScale);
-                                    
-                                    % Constrain PWM values
-                                    leftPWM = max(-obj.MaxPWM, min(obj.MaxPWM, leftPWM));
-                                    rightPWM = max(-obj.MaxPWM, min(obj.MaxPWM, rightPWM));
-                                    
-                                    % Send motor commands
-                                    cmdStr = sprintf("CMD:%d,%d", leftPWM, rightPWM);
-                                    writeline(obj.SerialPort, cmdStr);
-                                catch ME
-                                    fprintf('Fuzzy logic error: %s\n', ME.message);
-                                    writeline(obj.SerialPort, "CMD:0,0");
-                                end
+                                inputs = [scaledXError, scaledYError, headingError];
+                                outputs = evalfis(obj.FuzzySystem, inputs);
+                                
+                                % Scale outputs by distance factor (reduce speed when close)
+                                distanceFactor = min(1, distance / (obj.PositionThreshold * 2));
+                                leftPWM = round(outputs(1) * distanceFactor);
+                                rightPWM = round(outputs(2) * distanceFactor);
+                                
+                                % Constrain PWM values
+                                leftPWM = max(-255, min(255, leftPWM));
+                                rightPWM = max(-255, min(255, rightPWM));
+                                
+                                % Send motor commands
+                                cmdStr = sprintf("CMD:%d,%d", leftPWM, rightPWM);
+                                writeline(obj.SerialPort, cmdStr);
+                                
+                                % Debug output
+                                fprintf('Position: (%.6f, %.6f) | Target: (%.6f, %.6f)\n', ...
+                                    currentLat, currentLon, targetLat, targetLon);
+                                fprintf('Errors: x=%.2e, y=%.2e | Heading: %.1f° (Error: %.1f°)\n', ...
+                                    xError, yError, heading, headingError);
+                                fprintf('Outputs: L=%d, R=%d | Distance: %.2fm\n\n', ...
+                                    leftPWM, rightPWM, distance);
                             end
                         catch ME
                             fprintf('Error processing GPS data: %s\n', ME.message);
@@ -177,82 +298,6 @@ classdef PathFollowingRobot < handle
                 end
                 pause(0.1);
             end
-        end
-        
-        function fis = create3DFuzzySystem(obj)
-            % Create new 3-input FIS
-            fis = mamfis('Name', 'path_following_3d');
-            
-            % Add xError (latitude error) input
-            fis = addInput(fis, [-5 5], 'Name', 'xError');
-            fis = addMF(fis, 'xError', 'trimf', [-5 -5 -1.67], 'Name', 'Left');
-            fis = addMF(fis, 'xError', 'trimf', [-2.5 0 2.5], 'Name', 'Center');
-            fis = addMF(fis, 'xError', 'trimf', [1.67 5 5], 'Name', 'Right');
-            
-            % Add yError (longitude error) input
-            fis = addInput(fis, [-5 5], 'Name', 'yError');
-            fis = addMF(fis, 'yError', 'trimf', [-5 -5 -1.67], 'Name', 'Behind');
-            fis = addMF(fis, 'yError', 'trimf', [-2.5 0 2.5], 'Name', 'Center');
-            fis = addMF(fis, 'yError', 'trimf', [1.67 5 5], 'Name', 'Ahead');
-            
-            % Add heading_error input
-            fis = addInput(fis, [-180 180], 'Name', 'heading_error');
-            fis = addMF(fis, 'heading_error', 'trimf', [-180 -180 -60], 'Name', 'Left');
-            fis = addMF(fis, 'heading_error', 'trimf', [-90 0 90], 'Name', 'Straight');
-            fis = addMF(fis, 'heading_error', 'trimf', [60 180 180], 'Name', 'Right');
-            
-            % Add pwm_left output
-            fis = addOutput(fis, [-obj.MaxPWM obj.MaxPWM], 'Name', 'pwm_left');
-            fis = addMF(fis, 'pwm_left', 'trimf', [-255 -255 -85], 'Name', 'Reverse');
-            fis = addMF(fis, 'pwm_left', 'trimf', [-170 0 170], 'Name', 'Stop');
-            fis = addMF(fis, 'pwm_left', 'trimf', [85 255 255], 'Name', 'Forward');
-            
-            % Add pwm_right output
-            fis = addOutput(fis, [-obj.MaxPWM obj.MaxPWM], 'Name', 'pwm_right');
-            fis = addMF(fis, 'pwm_right', 'trimf', [-255 -255 -85], 'Name', 'Reverse');
-            fis = addMF(fis, 'pwm_right', 'trimf', [-170 0 170], 'Name', 'Stop');
-            fis = addMF(fis, 'pwm_right', 'trimf', [85 255 255], 'Name', 'Forward');
-            
-            % Rule Base - 3x3x3 = 27 rules
-            ruleList = [
-            1 1 1, 3 1, 1 1;   % Left, Behind, Left heading - Forward Left, Reverse Right
-            1 1 2, 3 2, 1 1;   % Left, Behind, Straight - Forward Left, Stop Right
-            1 1 3, 3 3, 1 1;   % Left, Behind, Right - Forward Left, Forward Right
-            
-            1 2 1, 3 1, 1 1;   % Left, Center, Left heading
-            1 2 2, 3 2, 1 1;   % Left, Center, Straight
-            1 2 3, 3 3, 1 1;   % Left, Center, Right
-            
-            1 3 1, 3 1, 1 1;   % Left, Ahead, Left heading
-            1 3 2, 3 2, 1 1;   % Left, Ahead, Straight
-            1 3 3, 3 3, 1 1;   % Left, Ahead, Right
-            
-            2 1 1, 1 3, 1 1;   % Center, Behind, Left heading - Reverse Left, Forward Right
-            2 1 2, 3 3, 1 1;   % Center, Behind, Straight - Forward both
-            2 1 3, 3 1, 1 1;   % Center, Behind, Right heading - Forward Right, Reverse Left
-            
-            2 2 1, 2 2, 1 1;   % Center, Center, Left heading - Stop both
-            2 2 2, 2 2, 1 1;   % Center, Center, Straight - Stop both
-            2 2 3, 2 2, 1 1;   % Center, Center, Right heading - Stop both
-            
-            2 3 1, 3 3, 1 1;   % Center, Ahead, Left heading - Forward both
-            2 3 2, 3 3, 1 1;   % Center, Ahead, Straight - Forward both
-            2 3 3, 3 3, 1 1;   % Center, Ahead, Right heading - Forward both
-            
-            3 1 1, 1 3, 1 1;   % Right, Behind, Left heading - Reverse Left, Forward Right
-            3 1 2, 2 3, 1 1;   % Right, Behind, Straight - Stop Left, Forward Right
-            3 1 3, 1 3, 1 1;   % Right, Behind, Right heading - Reverse Left, Forward Right
-            
-            3 2 1, 1 3, 1 1;   % Right, Center, Left heading
-            3 2 2, 1 3, 1 1;   % Right, Center, Straight
-            3 2 3, 1 3, 1 1;   % Right, Center, Right heading
-            
-            3 3 1, 1 3, 1 1;   % Right, Ahead, Left heading
-            3 3 2, 1 3, 1 1;   % Right, Ahead, Straight
-            3 3 3, 1 3, 1 1;   % Right, Ahead, Right heading
-            ];
-            
-            fis = addRule(fis, ruleList);
         end
         
         function distance = calculateDistance(~, lat1, lon1, lat2, lon2)
