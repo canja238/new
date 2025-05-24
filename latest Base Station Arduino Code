@@ -25,10 +25,10 @@ void loop() {
         if (data.charAt(i) == ',') commas++;
       }
       
-      if (commas >= 3) {
+      if (commas == 3) {
         Serial.println(data);
       } else {
-        Serial.println("GPS:0,0,0,0,0"); // Send invalid data marker
+        Serial.println("GPS:0,0,0,0"); // Send invalid data marker
       }
     }
   }
