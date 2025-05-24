@@ -29,8 +29,6 @@ struct MotorCommand {
 MotorCommand currentCommand = {0, 0};
 unsigned long lastCommandTime = 0;
 const unsigned long COMMAND_TIMEOUT = 2000; // 2 seconds
-float lastLatitude = 0;
-float lastLongitude = 0;
 
 void setup() {
   #ifdef DEBUG
@@ -54,8 +52,7 @@ void loop() {
   // Read GPS data
   while (GPS_SERIAL.available() > 0) {
     if (gps.encode(GPS_SERIAL.read())) {
-      if (gps.location.isValid() && gps.location.isUpdated() && 
-          gps.hdop.isValid() && gps.hdop.value() < 2.5) {
+      if (gps.location.isValid() && gps.location.isUpdated()) {
         sendGPSData();
       }
     }
@@ -84,18 +81,8 @@ void loop() {
 void sendGPSData() {
   float latitude = gps.location.lat();
   float longitude = gps.location.lng();
-  
-  // Simple low-pass filter for position data
-  float alpha = 0.3;
-  latitude = alpha * latitude + (1 - alpha) * lastLatitude;
-  longitude = alpha * longitude + (1 - alpha) * lastLongitude;
-  
-  lastLatitude = latitude;
-  lastLongitude = longitude;
-  
   float speed = gps.speed.mps();
   float course = gps.course.deg();
-  float hdop = gps.hdop.value();
   
   HC12_SERIAL.print("GPS:");
   HC12_SERIAL.print(latitude, 6);
@@ -104,16 +91,12 @@ void sendGPSData() {
   HC12_SERIAL.print(",");
   HC12_SERIAL.print(speed, 2);
   HC12_SERIAL.print(",");
-  HC12_SERIAL.print(course, 2);
-  HC12_SERIAL.print(",");
-  HC12_SERIAL.println(hdop, 1);
+  HC12_SERIAL.println(course, 2);
   
   DEBUG_PRINT("GPS: ");
   DEBUG_PRINT(latitude, 6);
   DEBUG_PRINT(", ");
-  DEBUG_PRINT(longitude, 6);
-  DEBUG_PRINT(", HDOP: ");
-  DEBUG_PRINTLN(hdop, 1);
+  DEBUG_PRINTLN(longitude, 6);
 }
 
 void parseMotorCommand(String command) {
@@ -125,43 +108,35 @@ void parseMotorCommand(String command) {
 }
 
 void executeMotorCommand() {
-  // Deadband for very small PWM values
-  const int deadband = 5;
-  
   // Left motor
-  int leftPWM = currentCommand.leftPWM;
-  if (abs(leftPWM) < deadband) {
+  if (currentCommand.leftPWM > 0) {
     digitalWrite(motorPin1, LOW);
-    digitalWrite(motorPin2, LOW);
-    leftPWM = 0;
-  } else if (leftPWM > 0) {
+    digitalWrite(motorPin2, HIGH);
+  } else if (currentCommand.leftPWM < 0) {
     digitalWrite(motorPin1, HIGH);
     digitalWrite(motorPin2, LOW);
   } else {
-    digitalWrite(motorPin1, LOW);
+    digitalWrite(motorPin1, HIGH);
     digitalWrite(motorPin2, HIGH);
   }
   
   // Right motor
-  int rightPWM = currentCommand.rightPWM;
-  if (abs(rightPWM) < deadband) {
+  if (currentCommand.rightPWM > 0) {
     digitalWrite(motorPin3, LOW);
-    digitalWrite(motorPin4, LOW);
-    rightPWM = 0;
-  } else if (rightPWM > 0) {
+    digitalWrite(motorPin4, HIGH);
+  } else if (currentCommand.rightPWM < 0) {
     digitalWrite(motorPin3, HIGH);
     digitalWrite(motorPin4, LOW);
   } else {
-    digitalWrite(motorPin3, LOW);
-    digitalWrite(motorPin4, HIGH);
+    digitalWrite(motorPin3, HIGH);
+    digitalWrite(motorPin4, LOW);
   }
   
-  // Apply PWM with constrained values
-  analogWrite(ENA, constrain(abs(leftPWM) * 2.55, 0, 255));
-  analogWrite(ENB, constrain(abs(rightPWM) * 2.55, 0, 255));
+  analogWrite(ENA, constrain(abs(currentCommand.leftPWM), 0, 255);
+  analogWrite(ENB, constrain(abs(currentCommand.rightPWM), 0, 255);
   
   DEBUG_PRINT("Motors: L=");
-  DEBUG_PRINT(leftPWM);
+  DEBUG_PRINT(currentCommand.leftPWM);
   DEBUG_PRINT(", R=");
-  DEBUG_PRINTLN(rightPWM);
+  DEBUG_PRINTLN(currentCommand.rightPWM);
 }
