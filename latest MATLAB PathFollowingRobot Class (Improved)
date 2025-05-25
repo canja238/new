@@ -11,7 +11,7 @@ classdef PathFollowingRobot < handle
         WaypointPlot
         LastPositionTime
         PositionHistory
-        LinearSpeed = 0.3333 % meters per second
+        LinearSpeed = 0.2 % meters per second
         DeltaT = 0.775 % seconds
         PositionThreshold = 0.00005 % degrees (~5 meters)
         HeadingThreshold = 15 % degrees
@@ -26,10 +26,17 @@ classdef PathFollowingRobot < handle
             
             % Load waypoints
             obj.Waypoints = [
-                7.214920000, 124.249217000;
-                7.214920006, 124.249217231;
-                % ... (rest of your waypoints)
-                7.214927296, 124.249497897;
+            7.214900000, 124.249231000;
+            7.214907000, 124.249277111;
+            7.214914000, 124.249323222;
+            7.214921000, 124.249369333;
+            7.214928000, 124.249415444;
+            7.214935000, 124.249461556;
+            7.214942000, 124.249507667;
+            7.214949000, 124.249553778;
+            7.214956000, 124.249599889;
+            7.214963000, 124.249646000;
+
             ];
             
             obj.CurrentWaypointIndex = 1;
