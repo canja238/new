@@ -1,0 +1,445 @@
+classdef PathFollowingRobot < handle
+    properties
+        SerialPort
+        Waypoints
+        CurrentWaypointIndex
+        FuzzySystem
+        Running
+        MapFigure
+        PathPlot
+        RobotPlot
+        WaypointPlot
+        LastPositionTime
+        PositionHistory
+        LinearSpeed = 0.2 % meters per second
+        DeltaT = 0.775 % seconds
+        PositionThreshold = 0.00005 % degrees (~5 meters)
+        HeadingThreshold = 15 % degrees
+        LogFile
+        LogData
+        LogStartTime
+        PerformanceFigure
+    end
+    
+    methods
+        function obj = PathFollowingRobot(portName)
+            % Initialize serial port
+            obj.SerialPort = serialport(portName, 115200);
+            configureTerminator(obj.SerialPort, "LF");
+            flush(obj.SerialPort);
+            
+            % Load waypoints
+            obj.Waypoints = [
+                7.214900000, 124.249231000;
+                7.214907000, 124.249277111;
+                7.214914000, 124.249323222;
+                7.214921000, 124.249369333;
+                7.214928000, 124.249415444;
+                7.214935000, 124.249461556;
+                7.214942000, 124.249507667;
+                7.214949000, 124.249553778;
+                7.214956000, 124.249599889;
+                7.214963000, 124.249646000;
+            ];
+            
+            obj.CurrentWaypointIndex = 1;
+            obj.Running = false;
+            obj.PositionHistory = [];
+            obj.LastPositionTime = datetime('now');
+            
+            % Initialize logging
+            obj.initializeLogging();
+            
+            % Initialize fuzzy logic system
+            obj.initializeFuzzySystem();
+            
+            % Initialize map visualization
+            obj.initializeMap();
+            
+            disp('Robot initialized and ready to run');
+        end
+        
+        function initializeLogging(obj)
+            % Create a timestamped log file
+            timestamp = datestr(now, 'yyyy-mm-dd_HH-MM-SS');
+            obj.LogFile = sprintf('robot_performance_%s.csv', timestamp);
+            
+            % Initialize log data structure
+            obj.LogData = table('Size', [0, 13], ...
+                'VariableTypes', {'datetime', 'double', 'double', 'double', 'double', ...
+                                'double', 'double', 'double', 'double', 'double', 'double', ...
+                                'double', 'double'}, ...
+                'VariableNames', {'Timestamp', 'Latitude', 'Longitude', 'Speed', 'Heading', ...
+                                 'TargetLat', 'TargetLon', 'XError', 'YError', 'HeadingError', ...
+                                 'DistanceToTarget', 'LeftPWM', 'RightPWM'});
+            
+            % Write header to CSV file
+            fid = fopen(obj.LogFile, 'w');
+            fprintf(fid, '%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s\n', ...
+                'Timestamp', 'Latitude', 'Longitude', 'Speed', 'Heading', ...
+                'TargetLat', 'TargetLon', 'XError', 'YError', 'HeadingError', ...
+                'DistanceToTarget', 'LeftPWM', 'RightPWM');
+            fclose(fid);
+            
+            obj.LogStartTime = datetime('now');
+        end
+        
+        function logData(obj, timestamp, lat, lon, speed, heading, ...
+                        targetLat, targetLon, xError, yError, headingError, distance, leftPWM, rightPWM)
+            % Add data to in-memory table
+            newRow = {timestamp, lat, lon, speed, heading, ...
+                     targetLat, targetLon, xError, yError, headingError, distance, leftPWM, rightPWM};
+            obj.LogData = [obj.LogData; newRow];
+            
+            % Append to CSV file
+            fid = fopen(obj.LogFile, 'a');
+            fprintf(fid, '%s,%.8f,%.8f,%.2f,%.2f,%.8f,%.8f,%.8f,%.8f,%.2f,%.2f,%d,%d\n', ...
+                datestr(timestamp, 'yyyy-mm-dd HH:MM:SS.FFF'), ...
+                lat, lon, speed, heading, ...
+                targetLat, targetLon, xError, yError, headingError, distance, leftPWM, rightPWM);
+            fclose(fid);
+        end
+        
+        function plotPerformance(obj)
+            if height(obj.LogData) < 2
+                disp('Not enough data to plot performance');
+                return;
+            end
+            
+            % Create performance figure if it doesn't exist
+            if isempty(obj.PerformanceFigure) || ~isvalid(obj.PerformanceFigure)
+                obj.PerformanceFigure = figure('Name', 'Performance Analysis', 'NumberTitle', 'off');
+            else
+                figure(obj.PerformanceFigure);
+                clf;
+            end
+            
+            % Calculate elapsed time in seconds
+            elapsedTime = seconds(obj.LogData.Timestamp - obj.LogData.Timestamp(1));
+            
+            % Plot 1: Position and Heading
+            subplot(3,2,[1,3]);
+            yyaxis left;
+            plot(elapsedTime, obj.LogData.XError * 1e5, 'r-', 'DisplayName', 'Lat Error (x10^5)');
+            hold on;
+            plot(elapsedTime, obj.LogData.YError * 1e5, 'b-', 'DisplayName', 'Lon Error (x10^5)');
+            ylabel('Position Error');
+            
+            yyaxis right;
+            plot(elapsedTime, obj.LogData.HeadingError, 'g-', 'DisplayName', 'Heading Error');
+            ylabel('Heading Error (deg)');
+            xlabel('Elapsed Time (s)');
+            title('Position and Heading Errors');
+            legend;
+            grid on;
+            
+            % Plot 2: Distance to Target
+            subplot(3,2,2);
+            plot(elapsedTime, obj.LogData.DistanceToTarget, 'm-');
+            ylabel('Distance (m)');
+            title('Distance to Target');
+            grid on;
+            
+            % Plot 3: Motor Commands
+            subplot(3,2,4);
+            plot(elapsedTime, obj.LogData.LeftPWM, 'b-', 'DisplayName', 'Left PWM');
+            hold on;
+            plot(elapsedTime, obj.LogData.RightPWM, 'r-', 'DisplayName', 'Right PWM');
+            ylabel('PWM Value');
+            title('Motor Commands');
+            legend;
+            grid on;
+            
+            % Plot 4: Speed
+            subplot(3,2,6);
+            plot(elapsedTime, obj.LogData.Speed, 'k-');
+            ylabel('Speed (m/s)');
+            xlabel('Elapsed Time (s)');
+            title('Robot Speed');
+            grid on;
+            
+            % Calculate metrics
+            totalTime = elapsedTime(end);
+            avgSpeed = mean(obj.LogData.Speed);
+            maxSpeed = max(obj.LogData.Speed);
+            
+            % Calculate distance traveled (approximate)
+            latDiff = diff(obj.LogData.Latitude) * 111320; % meters per degree
+            lonDiff = diff(obj.LogData.Longitude) * 111320 * cosd(mean(obj.LogData.Latitude));
+            distanceTraveled = sum(sqrt(latDiff.^2 + lonDiff.^2));
+            
+            % Calculate position errors in meters
+            xErrorMeters = obj.LogData.XError * 111320;
+            yErrorMeters = obj.LogData.YError * 111320 * cosd(mean(obj.LogData.Latitude));
+            positionErrors = sqrt(xErrorMeters.^2 + yErrorMeters.^2);
+            avgError = mean(positionErrors);
+            maxError = max(positionErrors);
+            
+            % Display metrics
+            annotation('textbox', [0.15, 0.85, 0.7, 0.1], 'String', ...
+                sprintf(['Total Time: %.1f s | Distance Traveled: %.1f m\n', ...
+                        'Avg Speed: %.2f m/s | Max Speed: %.2f m/s\n', ...
+                        'Avg Position Error: %.2f m | Max Error: %.2f m'], ...
+                totalTime, distanceTraveled, avgSpeed, maxSpeed, avgError, maxError), ...
+                'EdgeColor', 'none', 'FontSize', 10, 'BackgroundColor', 'white');
+            
+            % Save performance plot
+            saveas(obj.PerformanceFigure, strrep(obj.LogFile, '.csv', '_performance.png'));
+        end
+        
+        function initializeFuzzySystem(obj)
+            % Create new FIS
+            fis = mamfis('Name', 'path_following');
+            
+            % Add inputs and outputs with modern syntax
+            fis = addInput(fis, [-0.0005 0.0005], 'Name', 'xError');
+            fis = addMF(fis, 'xError', 'trimf', [-0.0005 -0.0005 -0.00025], 'Name', 'Left');
+            fis = addMF(fis, 'xError', 'trimf', [-0.0003 0 0.0003], 'Name', 'Center');
+            fis = addMF(fis, 'xError', 'trimf', [0.00025 0.0005 0.0005], 'Name', 'Right');
+            
+            fis = addInput(fis, [-0.0005 0.0005], 'Name', 'yError');
+            fis = addMF(fis, 'yError', 'trimf', [-0.0005 -0.0005 -0.00025], 'Name', 'Behind');
+            fis = addMF(fis, 'yError', 'trimf', [-0.0003 0 0.0003], 'Name', 'OnTrack');
+            fis = addMF(fis, 'yError', 'trimf', [0.00025 0.0005 0.0005], 'Name', 'Ahead');
+            
+            fis = addInput(fis, [-180 180], 'Name', 'heading_error');
+            fis = addMF(fis, 'heading_error', 'trimf', [-180 -180 -45], 'Name', 'Left');
+            fis = addMF(fis, 'heading_error', 'trimf', [-30 0 30], 'Name', 'Straight');
+            fis = addMF(fis, 'heading_error', 'trimf', [45 180 180], 'Name', 'Right');
+            
+            fis = addOutput(fis, [-255 255], 'Name', 'pwm_left');
+            fis = addMF(fis, 'pwm_left', 'trimf', [-255 -255 -127], 'Name', 'Reverse');
+            fis = addMF(fis, 'pwm_left', 'trimf', [-191 0 191], 'Name', 'Slow');
+            fis = addMF(fis, 'pwm_left', 'trimf', [127 255 255], 'Name', 'Forward');
+            
+            fis = addOutput(fis, [-255 255], 'Name', 'pwm_right');
+            fis = addMF(fis, 'pwm_right', 'trimf', [-255 -255 -127], 'Name', 'Reverse');
+            fis = addMF(fis, 'pwm_right', 'trimf', [-191 0 191], 'Name', 'Slow');
+            fis = addMF(fis, 'pwm_right', 'trimf', [127 255 255], 'Name', 'Forward');
+            
+            % Rule Base
+            ruleList = [
+                1 1 1 3 1 1 1;  % Far left, behind, left turn -> strong left, weak right
+                1 2 2 3 2 1 1;  % Far left, on track, straight -> medium left, medium right
+                1 3 3 1 3 1 1;  % Far left, ahead, right turn -> weak left, strong right
+                
+                2 1 1 3 1 1 1;  % Center, behind, left turn -> strong left, weak right
+                2 2 2 3 3 1 1;  % Center, on track, straight -> forward both
+                2 3 3 1 3 1 1;  % Center, ahead, right turn -> weak left, strong right
+                
+                3 1 1 3 3 1 1;  % Far right, behind, left turn -> strong left, strong right
+                3 2 2 2 3 1 1;  % Far right, on track, straight -> medium left, medium right
+                3 3 3 1 3 1 1;  % Far right, ahead, right turn -> weak left, strong right
+            ];
+            
+            fis = addRule(fis, ruleList);
+            obj.FuzzySystem = fis;
+            
+            % Plot membership functions
+            mfFig = figure('Name', 'Fuzzy Membership Functions', 'NumberTitle', 'off');
+            subplot(2,3,1); plotmf(fis, 'input', 1); title('xError (Latitude)');
+            subplot(2,3,2); plotmf(fis, 'input', 2); title('yError (Longitude)');
+            subplot(2,3,3); plotmf(fis, 'input', 3); title('Heading Error');
+            subplot(2,3,4); plotmf(fis, 'output', 1); title('PWM Left');
+            subplot(2,3,5); plotmf(fis, 'output', 2); title('PWM Right');
+            
+            % Plot rule surfaces
+            surfFig = figure('Name', 'Control Surfaces', 'NumberTitle', 'off');
+            subplot(2,2,1); gensurf(fis, [1 2], 1); title('xError & yError → PWM Left');
+            subplot(2,2,2); gensurf(fis, [1 2], 2); title('xError & yError → PWM Right');
+            subplot(2,2,3); gensurf(fis, [1 3], 1); title('xError & Heading → PWM Left');
+            subplot(2,2,4); gensurf(fis, [2 3], 2); title('yError & Heading → PWM Right');
+            
+            % Save figures
+            saveas(mfFig, strrep(obj.LogFile, '.csv', '_membership.png'));
+            saveas(surfFig, strrep(obj.LogFile, '.csv', '_surfaces.png'));
+        end
+        
+        function initializeMap(obj)
+            obj.MapFigure = figure('Name', 'Robot Path Monitoring', 'NumberTitle', 'off');
+            
+            [lat, lon] = obj.convertToNumeric(obj.Waypoints);
+            geoplot(lat, lon, 'g-', 'LineWidth', 2, 'DisplayName', 'Planned Path');
+            hold on;
+            geoscatter(lat, lon, 'filled', 'MarkerFaceColor', 'red', 'DisplayName', 'Waypoints');
+            
+            obj.PathPlot = geoplot(lat(1), lon(1), 'b-', 'LineWidth', 1.5, 'DisplayName', 'Robot Path');
+            obj.RobotPlot = geoscatter(lat(1), lon(1), 100, 'filled', 'MarkerFaceColor', 'blue', 'DisplayName', 'Robot');
+            
+            geobasemap('satellite');
+            title('Robot Path Monitoring');
+            legend('Location', 'best');
+            drawnow;
+        end
+        
+        function [lat, lon] = convertToNumeric(~, waypoints)
+            lat = waypoints(:,1);
+            lon = waypoints(:,2);
+        end
+        
+        function updateMap(obj, currentLat, currentLon)
+            % Update path plot
+            xData = obj.PathPlot.LatitudeData;
+            yData = obj.PathPlot.LongitudeData;
+            
+            obj.PathPlot.LatitudeData = [xData, currentLat];
+            obj.PathPlot.LongitudeData = [yData, currentLon];
+            obj.PositionHistory = [obj.PositionHistory; currentLat, currentLon];
+            
+            % Update robot position
+            obj.RobotPlot.LatitudeData = currentLat;
+            obj.RobotPlot.LongitudeData = currentLon;
+            
+            % Highlight current target
+            targetLat = obj.Waypoints(obj.CurrentWaypointIndex, 1);
+            targetLon = obj.Waypoints(obj.CurrentWaypointIndex, 2);
+            geoscatter(targetLat, targetLon, 100, 'filled', 'MarkerFaceColor', 'yellow', 'DisplayName', 'Current Target');
+            
+            % Adjust view
+            latLim = [min([currentLat; obj.Waypoints(:,1)])-0.0001, max([currentLat; obj.Waypoints(:,1)])+0.0001];
+            lonLim = [min([currentLon; obj.Waypoints(:,2)])-0.0001, max([currentLon; obj.Waypoints(:,2)])+0.0001];
+            geolimits(latLim, lonLim);
+            
+            % Update legend
+            legend('Planned Path', 'Waypoints', 'Robot Path', 'Robot', 'Current Target');
+            
+            drawnow;
+        end
+        
+        function start(obj)
+            obj.Running = true;
+            obj.run();
+        end
+        
+        function stop(obj)
+            obj.Running = false;
+            writeline(obj.SerialPort, "CMD:0,0");
+            
+            % Plot performance when stopping
+            obj.plotPerformance();
+            
+            % Save final map
+            saveas(obj.MapFigure, strrep(obj.LogFile, '.csv', '_map.png'));
+        end
+        
+        function run(obj)
+            while obj.Running
+                if obj.SerialPort.NumBytesAvailable > 0
+                    data = readline(obj.SerialPort);
+                    
+                    if startsWith(data, "GPS:")
+                        try
+                            gpsData = sscanf(data, "GPS:%f,%f,%f,%f");
+                            if length(gpsData) == 4
+                                currentLat = gpsData(1);
+                                currentLon = gpsData(2);
+                                speed = gpsData(3);
+                                heading = gpsData(4);
+                                timestamp = datetime('now');
+                                
+                                obj.updateMap(currentLat, currentLon);
+                                
+                                % Get current target waypoint
+                                target = obj.Waypoints(obj.CurrentWaypointIndex, :);
+                                targetLat = target(1);
+                                targetLon = target(2);
+                                
+                                % Calculate position errors
+                                xError = targetLat - currentLat; % Latitude error
+                                yError = targetLon - currentLon; % Longitude error
+                                
+                                % Calculate distance to waypoint
+                                distance = obj.calculateDistance(currentLat, currentLon, targetLat, targetLon);
+                                
+                                % Calculate bearing and heading error
+                                bearing = obj.calculateBearing(currentLat, currentLon, targetLat, targetLon);
+                                headingError = obj.wrapTo180(bearing - heading);
+                                
+                                % Scale errors for fuzzy system
+                                scaledXError = xError * 1e5; % Scale to reasonable range
+                                scaledYError = yError * 1e5; % Scale to reasonable range
+                                
+                                % Fuzzy logic control
+                                inputs = [scaledXError, scaledYError, headingError];
+                                outputs = evalfis(obj.FuzzySystem, inputs);
+                                
+                                % Scale outputs by distance factor (reduce speed when close)
+                                distanceFactor = min(1, distance / (obj.PositionThreshold * 2));
+                                leftPWM = round(outputs(1) * distanceFactor);
+                                rightPWM = round(outputs(2) * distanceFactor);
+                                
+                                % Constrain PWM values
+                                leftPWM = max(-255, min(255, leftPWM));
+                                rightPWM = max(-255, min(255, rightPWM));
+                                
+                                % Log the data (including motor commands)
+                                obj.logData(timestamp, currentLat, currentLon, speed, heading, ...
+                                           targetLat, targetLon, xError, yError, headingError, ...
+                                           distance, leftPWM, rightPWM);
+                                
+                                % Check if reached waypoint
+                                if distance < obj.PositionThreshold && abs(headingError) < obj.HeadingThreshold
+                                    obj.CurrentWaypointIndex = min(obj.CurrentWaypointIndex + 1, size(obj.Waypoints, 1));
+                                    if obj.CurrentWaypointIndex == size(obj.Waypoints, 1)
+                                        obj.stop();
+                                        disp('Final waypoint reached!');
+                                        return;
+                                    end
+                                    continue;
+                                end
+                                
+                                % Send motor commands
+                                cmdStr = sprintf("CMD:%d,%d", leftPWM, rightPWM);
+                                writeline(obj.SerialPort, cmdStr);
+                                
+                                % Debug output
+                                fprintf('Position: (%.6f, %.6f) | Target: (%.6f, %.6f)\n', ...
+                                    currentLat, currentLon, targetLat, targetLon);
+                                fprintf('Errors: x=%.2e, y=%.2e | Heading: %.1f° (Error: %.1f°)\n', ...
+                                    xError, yError, heading, headingError);
+                                fprintf('Outputs: L=%d, R=%d | Distance: %.2fm\n\n', ...
+                                    leftPWM, rightPWM, distance);
+                            end
+                        catch ME
+                            fprintf('Error processing GPS data: %s\n', ME.message);
+                        end
+                    end
+                end
+                pause(0.1);
+            end
+        end
+        
+        function distance = calculateDistance(~, lat1, lon1, lat2, lon2)
+            R = 6371000; % Earth radius in meters
+            dLat = deg2rad(lat2-lat1);
+            dLon = deg2rad(lon2-lon1);
+            a = sin(dLat/2) * sin(dLat/2) + ...
+                cos(deg2rad(lat1)) * cos(deg2rad(lat2)) * ...
+                sin(dLon/2) * sin(dLon/2);
+            c = 2 * atan2(sqrt(a), sqrt(1-a));
+            distance = R * c;
+        end
+        
+        function bearing = calculateBearing(~, lat1, lon1, lat2, lon2)
+            lat1 = deg2rad(lat1);
+            lon1 = deg2rad(lon1);
+            lat2 = deg2rad(lat2);
+            lon2 = deg2rad(lon2);
+            
+            y = sin(lon2-lon1) * cos(lat2);
+            x = cos(lat1)*sin(lat2) - sin(lat1)*cos(lat2)*cos(lon2-lon1);
+            bearing = rad2deg(atan2(y, x));
+        end
+        
+        function angle = wrapTo180(~, angle)
+            angle = mod(angle + 180, 360) - 180;
+        end
+        
+        function delete(obj)
+            if obj.Running
+                obj.stop();
+            end
+            clear obj.SerialPort;
+        end
+    end
+end
