@@ -443,3 +443,18 @@ classdef PathFollowingRobot < handle
         end
     end
 end
+% Check available ports
+% serialportlist
+
+% Create robot object (replace 'COM7' with your actual port)
+% robot = PathFollowingRobot('COM7');
+
+% Start the robot
+% robot.start();
+
+% When done, stop the robot
+% robot.stop();
+
+% Clean up
+% clear robot;
+% instrreset;
