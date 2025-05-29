@@ -129,7 +129,7 @@ void executeMotorCommand() {
     digitalWrite(motorPin4, LOW);
   } else {
     digitalWrite(motorPin3, HIGH);
-    digitalWrite(motorPin4, LOW);
+    digitalWrite(motorPin4, HIGH);
   }
   
   analogWrite(ENA, constrain(abs(currentCommand.leftPWM) * 2.55, 0, 255));
